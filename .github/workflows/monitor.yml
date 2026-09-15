@@ -14,4 +14,5 @@ jobs:
       - run: pip install requests python-dotenv
       - run: python monitor.py
         env:
-          SLACK_WEBHOOK_URL: "${{ secrets.SLACK_WEBHOOK_URL }}"
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SUPPORTPILOT_API_KEY: ${{ secrets.SUPPORTPILOT_API_KEY }}
