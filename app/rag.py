@@ -5,11 +5,12 @@ import os
 from dotenv import load_dotenv
 import json
 import logging
+import time
 
 load_dotenv()
 
 
-def generate_answer_stream(question):
+def generate_answer_stream(question, max_retries=3):
     try:
         chunks = retrieve(question)
         context = "\n\n".join(chunks)
@@ -21,18 +22,30 @@ What you know:
 {context}
 
 Question: {question}"""
-
-        response_stream = client.models.generate_content_stream(
-            model="gemini-3.6-flash",
-            contents=prompt
-        )
-        for chunk in response_stream:
-            if chunk.text:
-                yield chunk.text
-        logging.info(f"Sources used for  '{question[:50]}...': {json.dumps(chunks)  }")
+        for attempt in range(max_retries):
+            try:
+                response_stream = client.models.generate_content_stream(
+                    model="gemini-3.6-flash",
+                    contents=prompt
+                )
+                for chunk in response_stream:
+                    if chunk.text:
+                        yield chunk.text
+                logging.info(f"Sources used for '{question[:50]}...': {json.dumps(chunks)}")
+                return
+            except Exception as e:
+                if "503" in str(e) and attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    logging.warning(f"Model overloaded, retrying in {wait_time}s (attempt {attempt + 1})")
+                    time.sleep(wait_time)
+                    continue
+                raise
     except Exception as e:
-        yield f"\n\n[ERROR: {str(e)}]"
+        yield "I'm having trouble reaching the AI service right now — please try again in a moment."
+        logging.error(f"generate_answer_stream failed after retries: {e}")
+        
 
+    
 client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 db = chromadb.PersistentClient(path="./chroma_db")
 collection = db.get_or_create_collection("support_docs")
