@@ -1,17 +1,23 @@
 # ui.py
 import streamlit as st
 import requests
+import json
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-st.set_page_config(page_title="SupportPilot", page_icon="🤖")
-st.title("🤖 SupportPilot")
-st.caption("Ask a question about our help center docs")
+st.set_page_config(page_title="Nimbus SupportPilot", page_icon="🤖")
+st.title("🤖 Nimbus SupportPilot")
+st.caption("Ask a question about our services")
 
-API_URL = "http://127.0.0.1:8000/ask"
-API_KEY = os.environ["SUPPORTPILOT_API_KEY"]
+def get_config(key, default=None):
+    if key in st.secrets:
+        return st.secrets[key]
+    return os.environ.get(key, default)
+
+API_URL = get_config("API_URL", "http://127.0.0.1:8000/ask")
+API_KEY = get_config("SUPPORTPILOT_API_KEY")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
