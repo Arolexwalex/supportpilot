@@ -2,14 +2,18 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-import os, logging
+import os, logging, sys 
 from dotenv import load_dotenv
 from app.rag import generate_answer
 from fastapi.responses import StreamingResponse
 from app.rag import generate_answer_stream
 
 load_dotenv()
-logging.basicConfig(filename="app.log", level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 app = FastAPI()
 limiter = Limiter(key_func=get_remote_address)
