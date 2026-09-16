@@ -12,8 +12,11 @@ st.title("🤖 Nimbus SupportPilot")
 st.caption("Ask a question about our services")
 
 def get_config(key, default=None):
-    if key in st.secrets:
-        return st.secrets[key]
+    try:
+         if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
     return os.environ.get(key, default)
 
 API_URL = get_config("API_URL", "http://127.0.0.1:8000/ask")
