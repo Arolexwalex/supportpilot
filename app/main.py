@@ -1,22 +1,20 @@
 from fastapi import FastAPI, Header, HTTPException, Request
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-import os, logging, sys 
-from dotenv import load_dotenv
-from app.rag import generate_answer
 from fastapi.responses import StreamingResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+import os, logging, sys
+from dotenv import load_dotenv
 from app.rag import generate_answer_stream
 
 load_dotenv()
-logging.basicConfig(
-    level=logging.INFO,
-    stream=sys.stdout,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s - %(levelname)s - %(message)s")
 
 app = FastAPI()
-limiter = Limiter(key_func=get_remote_address)
+
+def get_api_key_identity(request: Request):
+    return request.headers.get("x-api-key", "anonymous")
+
+limiter = Limiter(key_func=get_api_key_identity)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
