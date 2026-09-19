@@ -1,0 +1,11 @@
+Common Online Scam Types Targeting Nigerians
+
+Investment and Ponzi Schemes: Fraudulent platforms promise unrealistic, guaranteed returns on money invested, paying early participants with money from new investors rather than real profit. Nigerians lost an estimated $1 billion to a single scheme called CBEX (Crypto Bridge Exchange) in 2025 alone. The Securities and Exchange Commission has reported over N300 billion lost to fraudulent investment schemes in recent years. Warning signs include guaranteed daily or weekly returns, pressure to recruit others, and reluctance to explain exactly how profit is generated.
+
+Job Scams: Fraudulent job postings on social media promise high pay for little experience, then request an upfront "registration," "training," or "logistics" fee before the applicant can start. Once the fee is paid, the employer disappears and no job materializes. Legitimate employers do not require payment from candidates to be hired.
+
+Phishing and Bank Impersonation: Messages claiming to be from a bank, the Central Bank of Nigeria, EFCC, or FIRS create urgency ("your account will be blocked," "your BVN needs verification") and include a link to a fake login page that steals credentials once entered. Banks and government agencies do not ask for your PIN, OTP, or full BVN through a text message or unsolicited call.
+
+Fake Online Stores and Marketplace Scams: Sellers list products, often electronics, at prices dramatically below market value, collect payment, and never deliver. Common red flags include no verifiable business address, contact only through WhatsApp, and a social media account created very recently.
+
+AI-Generated Deepfake Scams: A newer and growing trend where scammers use AI-generated video or audio of real, well-known public figures appearing to endorse an investment platform or product. Several such videos using the likeness of prominent Nigerian public figures were fact-checked and debunked in early 2026. Seeing a familiar face in a video is no longer proof that the endorsement is real.

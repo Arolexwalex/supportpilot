@@ -8,7 +8,7 @@ load_dotenv()
 
 client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 db = chromadb.PersistentClient(path="./chroma_db")
-collection = db.get_or_create_collection("support_docs")
+collection = db.get_or_create_collection("scamshield_docs")
 
 def chunk_text(text, chunk_size=500):
     words = text.split()

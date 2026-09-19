@@ -13,7 +13,7 @@ load_dotenv()
 client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 db = chromadb.PersistentClient(path="./chroma_db")
-collection = db.get_or_create_collection("support_docs")
+collection = db.get_or_create_collection("scamshield_docs")
 
 def embed_query(text):
     result = client.models.embed_content(
@@ -26,6 +26,18 @@ def retrieve(question, top_k=3):
     query_embedding = embed_query(question)
     results = collection.query(query_embeddings=[query_embedding], n_results=top_k)
     return results["documents"][0]
+
+def build_prompt(question, context):
+    return f"""You are ScamShield, a friendly Nigerian assistant that helps people understand and recognize online scams. Answer naturally and warmly, like a knowledgeable friend, not a formal document. You may use a light, natural touch of Nigerian Pidgin where it fits, but keep it clear.
+
+Never mention "the context" or "the provided text" — just answer as if you simply know this information.
+
+If the answer isn't covered by what you know below, say you don't have that information — without mentioning documents or context.
+
+What you know:
+{context}
+
+Question: {question}"""
 
 def stream_from_groq(prompt):
     stream = groq_client.chat.completions.create(
@@ -41,33 +53,24 @@ def stream_from_groq(prompt):
 def generate_answer(question):
     chunks = retrieve(question)
     context = "\n\n".join(chunks)
-    prompt = f"""You are Nimbus's support assistant. Answer the question naturally and directly, the way a knowledgeable support agent would — as if you simply know this information. Never mention "the context," "the provided text," or that you're referencing documents.
+    prompt = build_prompt(question, context)
 
-If the answer isn't covered by what you know below, say you don't have that information — without mentioning documents or context.
-
-What you know:
-{context}
-
-Question: {question}"""
-
-    response = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=prompt
-    )
-    return response.text, chunks
+    try:
+        response = client.models.generate_content(model="gemini-3.6-flash", contents=prompt)
+        return response.text, chunks
+    except Exception as e:
+        logging.warning(f"Gemini failed ({e}), falling back to Groq for eval")
+        completion = groq_client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return completion.choices[0].message.content, chunks
 
 def generate_answer_stream(question, max_retries=3):
     try:
         chunks = retrieve(question)
         context = "\n\n".join(chunks)
-        prompt = f"""You are Nimbus's support assistant. Answer the question naturally and directly, the way a knowledgeable support agent would — as if you simply know this information. Never mention "the context," "the provided text," or that you're referencing documents.
-
-If the answer isn't covered by what you know below, say you don't have that information — without mentioning documents or context.
-
-What you know:
-{context}
-
-Question: {question}"""
+        prompt = build_prompt(question, context)
 
         try:
             for attempt in range(max_retries):

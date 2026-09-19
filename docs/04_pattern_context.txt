@@ -1,0 +1,5 @@
+Why These Patterns Matter: Context for Understanding Scam Detection
+
+Scam detection based on known patterns is not a guarantee that a message is fraudulent, nor that a message with no matched patterns is safe. It is a risk-awareness tool based on documented, common tactics used in real reported Nigerian scams. A message with several matched red flags warrants serious caution and independent verification before sending money or personal information. A message with no matched red flags should still be approached with normal caution, since scam tactics constantly evolve.
+
+Nigeria's digital economy involves over 122 million internet users, and nearly 60% have encountered some form of online scam according to the Nigerian Communications Commission. Financial institutions reported cybercrime losses exceeding N100 billion in a single year according to EFCC figures. Awareness and quick pattern recognition are among the most effective defenses available to ordinary users, since scam tactics evolve faster than most people's awareness of them.
