@@ -1,34 +1,36 @@
-# SupportPilot
+# Pangolin
 
-An AI-powered customer support assistant that answers questions using Retrieval-Augmented Generation (RAG) over a company's own help-center documentation — built end-to-end from planning through production deployment and monitoring.
+An AI-powered scam-detection assistant that helps everyday Nigerians recognize fraudulent job offers, investment schemes, and online listings — available on the web, Telegram, and WhatsApp.
 
 **Live demo:** [https://supportpilot-r3t5.onrender.com/docs](https://supportpilot-r3t5.onrender.com/docs)
+**Telegram:** search for the Pangolin bot
+**Web app:** your Streamlit Cloud link
 
-## What it does
+## The problem
 
-SupportPilot answers customer questions by retrieving relevant chunks from a knowledge base and generating a grounded, natural-sounding answer — rather than relying on an LLM's general knowledge, which could be outdated or simply wrong for a specific company's policies.
+Nigerians lost an estimated $1 billion to a single Ponzi scheme (CBEX) in 2025 alone. The SEC reports ₦300.2 billion lost to fraudulent investment schemes. Nearly 60% of Nigerian internet users have encountered an online scam, according to the NCC. Scammers increasingly use AI-generated deepfakes of real public figures to lend fake credibility to fraudulent offers.
 
-## Architecture
+## What Pangolin does
 
-User → Streamlit chat UI → FastAPI /ask endpoint (auth + rate limit)
-→ retrieve() searches ChromaDB for relevant chunks
-→ generate_answer_stream() streams a grounded answer back
-→ Gemini (primary) → automatic fallback to Groq if Gemini is unavailable
-→ sources logged server-side only, never exposed to the client
+Paste in a suspicious job offer, investment pitch, or listing, and Pangolin analyzes it two ways at once:
 
+1. **A deterministic pattern engine** — a transparent, weighted checklist of documented Nigerian scam tactics (upfront fees, unrealistic returns, urgency pressure, requests for sensitive information, impersonation of banks or government agencies), written in plain code, not left to AI guesswork.
+2. **An independent AI risk assessment** — a second signal evaluating the manipulation tactics in the message's language and framing, shown alongside the pattern results rather than replacing them.
 
-## Key features
+Both signals are combined transparently into one risk score and explanation — in plain English or Nigerian Pidgin — so the reasoning is always visible, never a black box.
 
-- **RAG pipeline**: document ingestion, chunking, embeddings, and vector search via ChromaDB
-- **Streaming responses**: answers appear progressively, not after a long silent wait
-- **Multi-provider resilience**: automatically fails over from Gemini to Groq if the primary provider is overloaded or unavailable — verified with a real forced-failure test, not just assumed
-- **Authenticated, rate-limited API**: API key auth and per-minute rate limiting on the public endpoint
-- **Continuous monitoring**: a scheduled GitHub Actions workflow runs a real synthetic check (not just a shallow health ping) every 15 minutes, alerting via Slack on failure
-- **Full operational documentation**: architecture notes, a runbook, an SOP, and a risk assessment (see `docs-admin/`)
+Pangolin can also answer general questions about common scam types and how to report fraud, and correctly tells the difference between a message that needs checking and a normal greeting or question.
+
+## Why this design
+
+- **The scam classification is never left entirely to the AI.** The pattern engine is deterministic and auditable; the AI only adds a second, clearly-labeled opinion.
+- **Privacy by design.** No message content is stored beyond what's needed to generate a response.
+- **Honest disclaimers.** Pangolin flags patterns — it never asserts a message definitely is fraud, and always recommends independent verification and official reporting channels (EFCC, NCC).
+- **Multi-provider resilience.** If the primary AI provider (Gemini) is unavailable, Pangolin automatically falls back to a second provider (Groq), tested under a real, unplanned quota exhaustion during development.
 
 ## Tech stack
 
-Python · FastAPI · Google Gemini API · Groq · ChromaDB · Streamlit · Docker · GitHub Actions · Render
+Python · FastAPI · Google Gemini · Groq · ChromaDB (RAG) · Telegram Bot API · Twilio WhatsApp Sandbox · Streamlit · Docker · GitHub Actions · Render
 
 ## Running it locally
 
@@ -36,40 +38,15 @@ Python · FastAPI · Google Gemini API · Groq · ChromaDB · Streamlit · Docke
 git clone https://github.com/your-username/supportpilot.git
 cd supportpilot
 python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
+source venv/bin/activate
 pip install -r requirements.txt
 ```
-Create a `.env` file with:
-
-GOOGLE_API_KEY=your-key
-GROQ_API_KEY=your-key
-SUPPORTPILOT_API_KEY=your-own-chosen-key
-SLACK_WEBHOOK_URL=your-webhook
-
-Then:
+Create `.env` with `GOOGLE_API_KEY`, `GROQ_API_KEY`, `SUPPORTPILOT_API_KEY`, `SLACK_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, then:
 ```bash
 python app/ingest.py
 uvicorn app.main:app --reload
 ```
-In a second terminal:
-```bash
-streamlit run ui.py
-```
 
-## Running with Docker
+## Roadmap
 
-```bash
-docker build -t supportpilot .
-docker run -p 8000:8000 --env-file .env supportpilot
-```
-
-## Testing
-
-```bash
-python -m pytest
-python eval.py
-```
-
-## Project documentation
-
-See `docs-admin/` for the architecture note, runbook, SOP, and risk assessment written for this system.
+Live verification against official registries (CAC, SEC) is a clear next step beyond this submission's scope — the current pattern-and-AI approach is intentionally the fast, reliable core to validate first.

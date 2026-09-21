@@ -5,8 +5,9 @@ from slowapi.errors import RateLimitExceeded
 import os, logging, sys, requests
 from xml.sax.saxutils import escape as xml_escape
 from dotenv import load_dotenv
-from app.rag import generate_answer_stream, client, groq_client
+from app.rag import generate_answer_stream, generate_answer, client, groq_client
 from app.scam_detector import check_text
+import re
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -24,21 +25,22 @@ VALID_API_KEY = os.environ["SUPPORTPILOT_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-
 def explain_result(text, result):
     if result["matched_rules"]:
         flags_text = "\n".join([f"- {r['description']}" for r in result["matched_rules"]])
     else:
-        flags_text = "No known red flags were detected in the message."
+        flags_text = "No known pattern matches were found."
 
     prompt = f"""You are ScamShield. A user shared this message to check: "{text}"
 
-Automated pattern analysis found:
-Risk level: {result['risk_level']} (score: {result['score']}/100)
-Flags detected:
+Pattern-matching analysis found:
 {flags_text}
 
-Explain this result warmly and clearly, in plain English with a light natural touch of Nigerian Pidgin where it fits. Reference the specific flags found, in your own words. If risk is high or medium, gently advise caution and suggest verifying independently or reporting to the EFCC or NCC. If no flags were found, remind them that this doesn't guarantee the message is genuine — normal caution still applies. Never accuse anyone directly of being a criminal; only describe the message's characteristics."""
+Additional AI assessment: {result['semantic_risk']} risk — {result['semantic_reasoning']}
+
+Overall risk level: {result['risk_level']} (score: {result['score']}/100)
+
+Explain this result warmly and clearly, in plain conversational paragraphs only — no asterisks, headers, tables, or bullet points, since this may be shown in a plain-text chat app. You may use a light natural touch of Nigerian Pidgin where it fits. Weave together what the pattern check and the AI assessment each noticed into one natural explanation. If risk is medium or high, gently advise caution and suggest verifying independently or reporting to the EFCC or NCC. Never accuse anyone directly of being a criminal; only describe the message's characteristics."""
 
     try:
         response = client.models.generate_content(model="gemini-3.6-flash", contents=prompt)
@@ -51,6 +53,19 @@ Explain this result warmly and clearly, in plain English with a light natural to
         )
         return completion.choices[0].message.content
 
+
+GREETING_PATTERNS = [r"^\s*(hi|hello|hey|good morning|good afternoon|good evening|how are you|what'?s up|thanks|thank you)\b"]
+QUESTION_STARTERS = [r"^\s*(what|why|how|who|when|where|is|are|can|does|do|explain|tell me)\b"]
+
+def looks_like_a_check_request(text):
+    text_lower = text.strip().lower()
+    if len(text_lower) < 8:
+        return False
+    if any(re.match(p, text_lower) for p in GREETING_PATTERNS):
+        return False
+    if any(re.match(p, text_lower) for p in QUESTION_STARTERS) and len(text_lower.split()) < 12:
+        return False
+    return True
 
 @app.post("/ask")
 @limiter.limit("10/minute")
@@ -98,8 +113,13 @@ async def telegram_webhook(request: Request):
 
     if text == "/start":
         send_telegram_message(chat_id,
-            "👋 Welcome to Pangolin! Paste any suspicious job offer, investment message, "
-            "or listing and I'll check it for known scam red flags.")
+            "Welcome to Pangolin! Paste any suspicious job offer, investment message, "
+            "or listing and I'll check it for scam red flags. Or just ask me a question.")
+        return {"ok": True}
+
+    if not looks_like_a_check_request(text):
+        answer, _ = generate_answer(text)
+        send_telegram_message(chat_id, answer)
         return {"ok": True}
 
     result = check_text(text)
@@ -117,9 +137,13 @@ async def whatsapp_webhook(request: Request):
     if not text:
         return Response(content="<Response></Response>", media_type="application/xml")
 
+    if not looks_like_a_check_request(text):
+        answer, _ = generate_answer(text)
+        twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{xml_escape(answer)}</Message></Response>'
+        return Response(content=twiml, media_type="application/xml")
+
     result = check_text(text)
     explanation = explain_result(text, result)
-    reply = f"ScamShield: {result['risk_level']} (Score: {result['score']}/100)\n\n{explanation}"
-
+    reply = f"Pangolin: {result['risk_level']} (Score: {result['score']}/100)\n\n{explanation}"
     twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{xml_escape(reply)}</Message></Response>'
     return Response(content=twiml, media_type="application/xml")

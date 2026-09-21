@@ -13,8 +13,8 @@ def get_config(key, default=None):
         pass
     return os.environ.get(key, default)
 
-st.set_page_config(page_title="ScamShield", page_icon="🛡️")
-st.title("🛡️ ScamShield")
+st.set_page_config(page_title="Pangolin", page_icon="🛡️")
+st.title("🛡️ Pangolin")
 st.caption("Paste a suspicious message to check it, or ask a question about common Nigerian scams")
 
 BASE_URL = get_config("API_URL", "http://127.0.0.1:8000").rstrip("/ask").rstrip("/")
@@ -80,7 +80,7 @@ else:
                     full_text = f"Error {response.status_code}"
                     placeholder.error(full_text)
             except requests.exceptions.ConnectionError:
-                full_text = "Could not reach ScamShield."
+                full_text = "Could not reach Pangolin."
                 placeholder.error(full_text)
 
         st.session_state.messages.append({"role": "assistant", "content": full_text})
