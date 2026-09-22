@@ -1,19 +1,32 @@
-from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import StreamingResponse, Response
+import logging
+import os
+import re
+import sys
+from xml.sax.saxutils import escape as xml_escape
+
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi.responses import Response, StreamingResponse
+import requests
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-import os, logging, sys, requests
-from xml.sax.saxutils import escape as xml_escape
-from dotenv import load_dotenv
-from app.rag import generate_answer_stream, generate_answer, client, groq_client
+
+from app.rag import client, generate_answer, generate_answer_stream, groq_client
 from app.scam_detector import check_text
-import re
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
 app = FastAPI()
 
+# In-memory deduplication cache for Telegram updates
+processed_updates = set()
+
+# Limiter configuration
 def get_api_key_identity(request: Request):
     return request.headers.get("x-api-key", "anonymous")
 
@@ -24,6 +37,12 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 VALID_API_KEY = os.environ["SUPPORTPILOT_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+# Twilio Configuration (For WhatsApp REST API background responses)
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER", "")
+
 
 def explain_result(text, result):
     if result["matched_rules"]:
@@ -43,19 +62,28 @@ Overall risk level: {result['risk_level']} (score: {result['score']}/100)
 Explain this result warmly and clearly, in plain conversational paragraphs only — no asterisks, headers, tables, or bullet points, since this may be shown in a plain-text chat app. You may use a light natural touch of Nigerian Pidgin where it fits. Weave together what the pattern check and the AI assessment each noticed into one natural explanation. If risk is medium or high, gently advise caution and suggest verifying independently or reporting to the EFCC or NCC. Never accuse anyone directly of being a criminal; only describe the message's characteristics."""
 
     try:
-        response = client.models.generate_content(model="gemini-3.6-flash", contents=prompt)
+        response = client.models.generate_content(
+            model="gemini-3.6-flash", contents=prompt
+        )
         return response.text
     except Exception as e:
-        logging.warning(f"Gemini failed ({e}), falling back to Groq for explanation")
+        logging.warning(
+            f"Gemini failed ({e}), falling back to Groq for explanation"
+        )
         completion = groq_client.chat.completions.create(
             model="openai/gpt-oss-120b",
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
         )
         return completion.choices[0].message.content
 
 
-GREETING_PATTERNS = [r"^\s*(hi|hello|hey|good morning|good afternoon|good evening|how are you|what'?s up|thanks|thank you)\b"]
-QUESTION_STARTERS = [r"^\s*(what|why|how|who|when|where|is|are|can|does|do|explain|tell me)\b"]
+GREETING_PATTERNS = [
+    r"^\s*(hi|hello|hey|good morning|good afternoon|good evening|how are you|what'?s up|thanks|thank you)\b"
+]
+QUESTION_STARTERS = [
+    r"^\s*(what|why|how|who|when|where|is|are|can|does|do|explain|tell me)\b"
+]
+
 
 def looks_like_a_check_request(text):
     text_lower = text.strip().lower()
@@ -67,13 +95,88 @@ def looks_like_a_check_request(text):
         return False
     return True
 
+
+def send_telegram_message(chat_id, text):
+    try:
+        requests.post(
+            f"{TELEGRAM_API}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=10,
+        )
+    except Exception as e:
+        logging.error(f"Failed to send Telegram message to {chat_id}: {e}")
+
+
+def send_whatsapp_message(to_number, text):
+    """Sends asynchronous WhatsApp message via Twilio REST API."""
+    if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER):
+        logging.error("Twilio credentials missing; cannot send background WhatsApp message.")
+        return
+
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+    data = {
+        "From": TWILIO_PHONE_NUMBER,
+        "To": to_number,
+        "Body": text,
+    }
+    try:
+        requests.post(url, data=data, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=10)
+    except Exception as e:
+        logging.error(f"Failed to send WhatsApp message to {to_number}: {e}")
+
+
+# --- Background Worker Functions ---
+
+def handle_telegram_message(chat_id: int, text: str):
+    """Executes heavy AI inference tasks in the background for Telegram."""
+    if text == "/start":
+        send_telegram_message(
+            chat_id,
+            "Welcome to Pangolin! Paste any suspicious job offer, investment message, "
+            "or listing and I'll check it for scam red flags. Or just ask me a question.",
+        )
+        return
+
+    if not looks_like_a_check_request(text):
+        answer, _ = generate_answer(text)
+        send_telegram_message(chat_id, answer)
+        return
+
+    result = check_text(text)
+    explanation = explain_result(text, result)
+    reply = f"🛡️ {result['risk_level']} (Score: {result['score']}/100)\n\n{explanation}"
+    send_telegram_message(chat_id, reply)
+
+
+def handle_whatsapp_message(from_number: str, text: str):
+    """Executes heavy AI inference tasks in the background for WhatsApp."""
+    if not looks_like_a_check_request(text):
+        answer, _ = generate_answer(text)
+        send_whatsapp_message(from_number, answer)
+        return
+
+    result = check_text(text)
+    explanation = explain_result(text, result)
+    reply = f"Pangolin: {result['risk_level']} (Score: {result['score']}/100)\n\n{explanation}"
+    send_whatsapp_message(from_number, reply)
+
+
+# --- Endpoint Definitions ---
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
 @app.post("/ask")
 @limiter.limit("10/minute")
 def ask(request: Request, question: str, x_api_key: str = Header(...)):
     if x_api_key != VALID_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
     logging.info(f"Question received: {question[:50]}...")
-    return StreamingResponse(generate_answer_stream(question), media_type="text/plain")
+    return StreamingResponse(
+        generate_answer_stream(question), media_type="text/plain"
+    )
 
 
 @app.post("/check")
@@ -88,22 +191,23 @@ def check(request: Request, message: str, x_api_key: str = Header(...)):
         "risk_level": result["risk_level"],
         "score": result["score"],
         "flags": [r["description"] for r in result["matched_rules"]],
-        "explanation": explanation
+        "explanation": explanation,
     }
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
-def send_telegram_message(chat_id, text):
-    requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text})
-
-
 @app.post("/telegram-webhook")
-async def telegram_webhook(request: Request):
+async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
     update = await request.json()
+
+    update_id = update.get("update_id")
+    if update_id:
+        if update_id in processed_updates:
+            return {"ok": True}
+        processed_updates.add(update_id)
+        # Prevent unbounded set memory growth over extended runtime
+        if len(processed_updates) > 10000:
+            processed_updates.clear()
+
     message = update.get("message", {})
     chat_id = message.get("chat", {}).get("id")
     text = message.get("text", "")
@@ -111,39 +215,27 @@ async def telegram_webhook(request: Request):
     if not chat_id or not text:
         return {"ok": True}
 
-    if text == "/start":
-        send_telegram_message(chat_id,
-            "Welcome to Pangolin! Paste any suspicious job offer, investment message, "
-            "or listing and I'll check it for scam red flags. Or just ask me a question.")
-        return {"ok": True}
-
-    if not looks_like_a_check_request(text):
-        answer, _ = generate_answer(text)
-        send_telegram_message(chat_id, answer)
-        return {"ok": True}
-
-    result = check_text(text)
-    explanation = explain_result(text, result)
-    reply = f"🛡️ {result['risk_level']} (Score: {result['score']}/100)\n\n{explanation}"
-    send_telegram_message(chat_id, reply)
+    # Offload heavy tasks to background execution and immediately acknowledge Telegram
+    background_tasks.add_task(handle_telegram_message, chat_id, text)
     return {"ok": True}
 
 
 @app.post("/whatsapp-webhook")
-async def whatsapp_webhook(request: Request):
+async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     form = await request.form()
     text = form.get("Body", "")
+    from_number = form.get("From", "")
 
-    if not text:
-        return Response(content="<Response></Response>", media_type="application/xml")
+    if not text or not from_number:
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+            media_type="application/xml",
+        )
 
-    if not looks_like_a_check_request(text):
-        answer, _ = generate_answer(text)
-        twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{xml_escape(answer)}</Message></Response>'
-        return Response(content=twiml, media_type="application/xml")
+    # Offload WhatsApp response pipeline to background tasks to prevent Twilio HTTP timeout retries
+    background_tasks.add_task(handle_whatsapp_message, from_number, text)
 
-    result = check_text(text)
-    explanation = explain_result(text, result)
-    reply = f"Pangolin: {result['risk_level']} (Score: {result['score']}/100)\n\n{explanation}"
-    twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{xml_escape(reply)}</Message></Response>'
-    return Response(content=twiml, media_type="application/xml")
+    return Response(
+        content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+        media_type="application/xml",
+    )

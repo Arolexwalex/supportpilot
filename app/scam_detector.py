@@ -3,6 +3,28 @@ import re
 from app.rag import client, groq_client
 
 RULES = [
+
+        {
+        "id": "authority_endorsement",
+        "description": "Claims endorsement by an unnamed or vague authority figure to build false credibility",
+        "weight": 20,
+        "patterns": [
+            r"(recommended|endorsed) by.{0,25}(top|leading|renowned|respected).{0,25}(executive|banker|official|expert)",
+            r"personally (recommend|invite)"
+        ]
+    },
+    {
+        "id": "informal_deposit_channel",
+        "description": "Directs you to deposit money or register through an informal group admin rather than an official channel",
+        "weight": 25,
+        "patterns": [
+            r"(whatsapp|telegram) group admin",
+            r"message.{0,20}admin.{0,20}(register|deposit|join)",
+            r"consistent.{0,15}(weekly|daily|monthly).{0,15}payout"
+        ]
+    },
+
+
     {
         "id": "upfront_payment",
         "description": "Asks for an upfront payment or fee before you receive a job, prize, or return",
@@ -101,6 +123,8 @@ def pattern_check(text):
 
 def semantic_check(text):
     prompt = f"""You are a fraud-pattern analyst. Assess ONLY the manipulation tactics used in this message, not whether any named company is legitimate. Message: "{text}"
+
+If this is an ordinary, professional message — a standard job posting, business communication, or greeting — with no manipulative framing, respond NONE. Only flag LOW, MEDIUM, or HIGH when you observe specific tactics like unrealistic returns, artificial urgency, unverified authority claims, or pressure to bypass normal verification.
 
 Respond in exactly this format:
 SEMANTIC_RISK: [NONE, LOW, MEDIUM, or HIGH]
