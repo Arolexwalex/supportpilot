@@ -6,6 +6,7 @@ from xml.sax.saxutils import escape as xml_escape
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 import requests
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -21,7 +22,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-app = FastAPI()
+app = FastAPI(title="Pangolin API")
 
 # In-memory deduplication cache for Telegram updates
 processed_updates = set()
@@ -34,7 +35,7 @@ limiter = Limiter(key_func=get_api_key_identity)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-VALID_API_KEY = os.environ["SUPPORTPILOT_API_KEY"]
+VALID_API_KEY = os.environ.get("SUPPORTPILOT_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
@@ -44,37 +45,53 @@ TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER", "")
 
 
-def explain_result(text, result):
-    if result["matched_rules"]:
+def explain_result(text: str, result: dict) -> str:
+    """
+    Generates a concise, plain-text explanation grounded in the scam analysis rules & score.
+    Uses strict prompt constraints for fast LLM generation times.
+    """
+    if result.get("matched_rules"):
         flags_text = "\n".join([f"- {r['description']}" for r in result["matched_rules"]])
     else:
-        flags_text = "No known pattern matches were found."
+        flags_text = "No direct rule matches were triggered."
 
-    prompt = f"""You are ScamShield. A user shared this message to check: "{text}"
+    prompt = f"""You are ScamShield (Pangolin AI). A user provided this text to analyze: "{text}"
 
-Pattern-matching analysis found:
+Analysis Findings:
+- Matched Rule Flags:
 {flags_text}
+- Semantic Risk Assessment: {result.get('semantic_risk', 'UNKNOWN')} ({result.get('semantic_reasoning', 'None')})
+- Overall Assessment: {result.get('risk_level', 'UNKNOWN')} (Score: {result.get('score', 0)}/100)
 
-Additional AI assessment: {result['semantic_risk']} risk — {result['semantic_reasoning']}
-
-Overall risk level: {result['risk_level']} (score: {result['score']}/100)
-
-Explain this result warmly and clearly, in plain conversational paragraphs only — no asterisks, headers, tables, or bullet points, since this may be shown in a plain-text chat app. You may use a light natural touch of Nigerian Pidgin where it fits. Weave together what the pattern check and the AI assessment each noticed into one natural explanation. If risk is medium or high, gently advise caution and suggest verifying independently or reporting to the EFCC or NCC. Never accuse anyone directly of being a criminal; only describe the message's characteristics."""
+INSTRUCTIONS:
+Explain this verdict warmly and concisely in 2-3 short plain-text paragraphs.
+- Keep it under 150 words total.
+- Do NOT use markdown asterisks (**), headers (#), tables, or bullet points.
+- You may use a light, natural touch of Nigerian Pidgin if helpful.
+- Gently advise caution and suggest verifying independently or reporting to EFCC/NCC if risk is Medium/High.
+- Never directly call anyone a criminal; describe only message characteristics."""
 
     try:
         response = client.models.generate_content(
-            model="gemini-3.6-flash", contents=prompt
+            model="gemini-3.6-flash", 
+            contents=prompt
         )
-        return response.text
+        return response.text.strip()
     except Exception as e:
-        logging.warning(
-            f"Gemini failed ({e}), falling back to Groq for explanation"
-        )
-        completion = groq_client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return completion.choices[0].message.content
+        logging.warning(f"Gemini generation failed ({e}), initiating fallback to Groq.")
+        try:
+            completion = groq_client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=250,
+            )
+            return completion.choices[0].message.content.strip()
+        except Exception as groq_err:
+            logging.error(f"Groq fallback failed as well: {groq_err}")
+            return (
+                f"Risk Level: {result.get('risk_level')}. "
+                "Please exercise extreme caution with this offer, as several suspicious patterns were detected."
+            )
 
 
 GREETING_PATTERNS = [
@@ -85,7 +102,7 @@ QUESTION_STARTERS = [
 ]
 
 
-def looks_like_a_check_request(text):
+def looks_like_a_check_request(text: str) -> bool:
     text_lower = text.strip().lower()
     if len(text_lower) < 8:
         return False
@@ -96,7 +113,7 @@ def looks_like_a_check_request(text):
     return True
 
 
-def send_telegram_message(chat_id, text):
+def send_telegram_message(chat_id: int, text: str):
     try:
         requests.post(
             f"{TELEGRAM_API}/sendMessage",
@@ -107,7 +124,7 @@ def send_telegram_message(chat_id, text):
         logging.error(f"Failed to send Telegram message to {chat_id}: {e}")
 
 
-def send_whatsapp_message(to_number, text):
+def send_whatsapp_message(to_number: str, text: str):
     """Sends asynchronous WhatsApp message via Twilio REST API."""
     if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER):
         logging.error("Twilio credentials missing; cannot send background WhatsApp message.")
@@ -127,8 +144,8 @@ def send_whatsapp_message(to_number, text):
 
 # --- Background Worker Functions ---
 
-def handle_telegram_message(chat_id: int, text: str):
-    """Executes heavy AI inference tasks in the background for Telegram."""
+async def handle_telegram_message(chat_id: int, text: str):
+    """Executes heavy AI inference tasks asynchronously in the background for Telegram."""
     if text == "/start":
         send_telegram_message(
             chat_id,
@@ -138,25 +155,28 @@ def handle_telegram_message(chat_id: int, text: str):
         return
 
     if not looks_like_a_check_request(text):
-        answer, _ = generate_answer(text)
+        answer, _ = await run_in_threadpool(generate_answer, text)
         send_telegram_message(chat_id, answer)
         return
 
-    result = check_text(text)
-    explanation = explain_result(text, result)
+    # Execute synchronous check_text and explain_result in worker threads
+    result = await run_in_threadpool(check_text, text)
+    explanation = await run_in_threadpool(explain_result, text, result)
+    
     reply = f"🛡️ {result['risk_level']} (Score: {result['score']}/100)\n\n{explanation}"
     send_telegram_message(chat_id, reply)
 
 
-def handle_whatsapp_message(from_number: str, text: str):
-    """Executes heavy AI inference tasks in the background for WhatsApp."""
+async def handle_whatsapp_message(from_number: str, text: str):
+    """Executes heavy AI inference tasks asynchronously in the background for WhatsApp."""
     if not looks_like_a_check_request(text):
-        answer, _ = generate_answer(text)
+        answer, _ = await run_in_threadpool(generate_answer, text)
         send_whatsapp_message(from_number, answer)
         return
 
-    result = check_text(text)
-    explanation = explain_result(text, result)
+    result = await run_in_threadpool(check_text, text)
+    explanation = await run_in_threadpool(explain_result, text, result)
+    
     reply = f"Pangolin: {result['risk_level']} (Score: {result['score']}/100)\n\n{explanation}"
     send_whatsapp_message(from_number, reply)
 
@@ -181,16 +201,19 @@ def ask(request: Request, question: str, x_api_key: str = Header(...)):
 
 @app.post("/check")
 @limiter.limit("10/minute")
-def check(request: Request, message: str, x_api_key: str = Header(...)):
+async def check(request: Request, message: str, x_api_key: str = Header(...)):
     if x_api_key != VALID_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    result = check_text(message)
-    explanation = explain_result(message, result)
-    logging.info(f"Scam check: score={result['score']} level={result['risk_level']}")
+    
+    # Run heavy blocking functions off the main async thread
+    result = await run_in_threadpool(check_text, message)
+    explanation = await run_in_threadpool(explain_result, message, result)
+    
+    logging.info(f"Scam check completed: score={result['score']} level={result['risk_level']}")
     return {
         "risk_level": result["risk_level"],
         "score": result["score"],
-        "flags": [r["description"] for r in result["matched_rules"]],
+        "flags": [r["description"] for r in result.get("matched_rules", [])],
         "explanation": explanation,
     }
 
@@ -204,7 +227,6 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
         if update_id in processed_updates:
             return {"ok": True}
         processed_updates.add(update_id)
-        # Prevent unbounded set memory growth over extended runtime
         if len(processed_updates) > 10000:
             processed_updates.clear()
 
@@ -215,7 +237,6 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
     if not chat_id or not text:
         return {"ok": True}
 
-    # Offload heavy tasks to background execution and immediately acknowledge Telegram
     background_tasks.add_task(handle_telegram_message, chat_id, text)
     return {"ok": True}
 
@@ -232,7 +253,6 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
             media_type="application/xml",
         )
 
-    # Offload WhatsApp response pipeline to background tasks to prevent Twilio HTTP timeout retries
     background_tasks.add_task(handle_whatsapp_message, from_number, text)
 
     return Response(

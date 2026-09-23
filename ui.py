@@ -37,7 +37,7 @@ if mode == "Check a message":
                     f"{BASE_URL}/check",
                     params={"message": message},
                     headers={"x-api-key": API_KEY},
-                    timeout=30
+                    timeout=120
                 )
                 if response.status_code == 200:
                     st.session_state.check_history.insert(0, {"message": message, "data": response.json(), "error": None})
